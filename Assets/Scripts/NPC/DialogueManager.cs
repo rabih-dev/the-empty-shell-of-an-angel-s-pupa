@@ -10,6 +10,8 @@ public class DialogueManager : MonoBehaviour
     public GameObject dialogueBox;
     public Text name;
     private AudioClip npcVoice;
+    public bool finishedSentence;
+    private string curSentence;
 
     public Queue<string> sentences;
     private PlayerController player;
@@ -22,6 +24,7 @@ public class DialogueManager : MonoBehaviour
         player = GameObject.FindGameObjectWithTag("Player").GetComponent<PlayerController>();
         sentences = new Queue<string>();
         dialogueBox.SetActive(false);
+        finishedSentence = true;
     }
 
 
@@ -32,9 +35,9 @@ public class DialogueManager : MonoBehaviour
             dialogueBox.SetActive(true);
             portait.sprite = content.portrait;
             name.text = content.name;
+            
 
             audioS.clip = content.voice;
-
             sentences.Clear();
 
             foreach (string sentence in content.sentences)
@@ -43,20 +46,23 @@ public class DialogueManager : MonoBehaviour
             }
             print("troquei tudo e vou chamar a proxima frase");
             NextSentence();
-
         }
     }
 
     public void NextSentence()
     {
         print("coisas serao ditas");
+
         if (sentences.Count == 0)
         {
+            finishedSentence = true;
             EndDialogue();
             return;
         }
-        string curSentence = sentences.Dequeue();
+
+        curSentence = sentences.Dequeue();
         StopAllCoroutines();
+        finishedSentence = false;
         StartCoroutine(LetterByLetter(curSentence));
     }
 
@@ -74,9 +80,21 @@ public class DialogueManager : MonoBehaviour
         {
             dialogueTxt.text += letter;
             audioS.Play();
+
             yield return new WaitForSeconds(0.1f);
 
+            if (dialogueTxt.text == sentenceToSpell)
+            {
+                finishedSentence = true;
+            }
         }
     }
 
+    public void SkipLetterByLetter()
+    {
+        finishedSentence = true;
+        StopAllCoroutines();
+        dialogueTxt.text = curSentence;
     }
+
+}

@@ -8,6 +8,7 @@ public class PlayerController : MonoBehaviour
 {
     [Header("Movement Values")]
     [SerializeField] private float walkSpeed;
+    [HideInInspector] public float currentWalkSpeed;
     [SerializeField] private float turnSpeed;
 
     private UnityEngine.Vector3 playerMovementFoward;
@@ -26,6 +27,7 @@ public class PlayerController : MonoBehaviour
     {
         cc = GetComponent<CharacterController>();
         Cursor.lockState = CursorLockMode.Locked;
+        currentWalkSpeed = walkSpeed;
 
     }
 
@@ -34,15 +36,16 @@ public class PlayerController : MonoBehaviour
     {
         Movement();
         Interactions();
+        LockToTalk();
     }
 
     public void Movement()
     {
 
 
-        playerMovementFoward = transform.forward * Input.GetAxisRaw("Vertical") * walkSpeed * Time.deltaTime;
+        playerMovementFoward = transform.forward * Input.GetAxisRaw("Vertical") * currentWalkSpeed * Time.deltaTime;
 
-        playerMovementSideways = transform.right * Input.GetAxisRaw("Horizontal") * walkSpeed * Time.deltaTime;
+        playerMovementSideways = transform.right * Input.GetAxisRaw("Horizontal") * currentWalkSpeed * Time.deltaTime;
 
         //Applying gravity
         //playerMovement.y -= playerMovement.y * Physics.gravity.y * Time.deltaTime;
@@ -64,8 +67,29 @@ public class PlayerController : MonoBehaviour
 
             else if (Input.GetMouseButtonDown(0) && isTalking)
             {
-                Singleton.GetInstance.dialogueManager.NextSentence();
+                if (Singleton.GetInstance.dialogueManager.finishedSentence)
+                {
+                    Singleton.GetInstance.dialogueManager.NextSentence();
+                }
+
+                else
+                {
+                    Singleton.GetInstance.dialogueManager.SkipLetterByLetter();
+                }
             }
+        }
+    }
+
+    public void LockToTalk()
+    {
+        if (isTalking)
+        {
+            currentWalkSpeed = 0;
+        }
+
+        else
+        {
+            currentWalkSpeed = walkSpeed;
         }
     }
 
