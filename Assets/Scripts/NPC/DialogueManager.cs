@@ -44,14 +44,14 @@ public class DialogueManager : MonoBehaviour
             {
                 sentences.Enqueue(sentence);
             }
-            print("troquei tudo e vou chamar a proxima frase");
+            
             NextSentence();
         }
     }
 
     public void NextSentence()
     {
-        print("coisas serao ditas");
+     
 
         if (sentences.Count == 0)
         {

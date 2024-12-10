@@ -41,8 +41,6 @@ public class Egghead : MonoBehaviour
     public void CountOneLoop() // acontece smp ao final do idle
     {
         anim.SetInteger("loop_count", anim.GetInteger("loop_count")+1);
-
-        print("contador: " + anim.GetInteger("loop_count") +" - " + "loops totais: " + idleLoops);
     }
 
 
