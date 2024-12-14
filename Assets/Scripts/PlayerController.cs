@@ -6,44 +6,71 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.ProBuilder.MeshOperations;
 using UnityEngine.Rendering;
+using static UnityEngine.UI.Image;
 //using UnityEngine.Windows;
 
 public class PlayerController : MonoBehaviour
 {
 
 
-    [Header("Player Values")]
-    [SerializeField]private float playerHeight;
+    [Header("Player")]
+    [SerializeField] private float playerHeight;
+    [SerializeField] private float playerRadius;
 
-    [Header("Movement Values")]
+    [Header("Movement")]
     [SerializeField] private float walkSpeed;
     [SerializeField] private float sprintSpeed;
+    [SerializeField] private float dashSpeed;
     [HideInInspector] public float currentMoveSpeed;
+    private float lastMoveSpeed;
 
-    private UnityEngine.Vector3 movementInput;
+    private Vector3 movementInput;
 
-    [Header("Jumping and Gliding Values")]
-    public float currentFallingMultiplier;
-    [SerializeField] private Vector2 glidingMultiplier;
-    [SerializeField] private float fallingMultiplier;
-
+    [Header("Jump")]
     [SerializeField] private float airMultiplier;
     [SerializeField] private float jumpForce;
     [SerializeField] private float jumpCutAmount;
 
-    private Vector3 playerVelocity;
+    [Header("Glide")]
+    [SerializeField] private Vector2 glidingMultiplier;
+
+    [Header("Fall")]
+    public float currentFallingMultiplier;
+    [SerializeField] private float fallingMultiplier;
+
+
+    [Header("Wall Slide")]
+    [SerializeField] private float wallSlideFallingMultiplier;
+
+    [Header("WallJump")]
+    [SerializeField] private Vector3 wallJumpForce;
+
+    [Header("Dash")]
+    private bool isDashing;
+    [SerializeField] private float dashDuration;
+    [SerializeField] private float dashForce;
+
+    [Header("Keeping Momentum")]
+[   SerializeField] private float smoothingMultiplier;
 
     [Header("Jump Buffer")]
-    [Range(0f, 5f)]
+    [Range(0f, 1f)]
+    [Tooltip("It's an increment to the ground checker, that will be acapted as an jump input when it hits the ground")]
     [SerializeField] private float bufferRange;
     private bool hasBufferedJump;
-    
-   
+    private bool isInBufferRange;
 
-    [Header("GroundChecking")]
+   [Header("GroundChecking")]
     [SerializeField] private LayerMask groundMask;
     [SerializeField] private float groundDrag;
     private bool isGrounded;
+
+    [Header("WallCheking")]
+    [SerializeField] private LayerMask wallMask;
+    Vector3 wallDirection;
+    RaycastHit wallHit;
+
+    private bool isOnWall;
 
     [Header("References")]
     public Rigidbody rb;
@@ -54,9 +81,8 @@ public class PlayerController : MonoBehaviour
     public KeyCode jumpButton;
     public KeyCode sprintButton;
 
-    //Dash
-    [SerializeField] private float dashForce;
-
+    
+    //reading double tap inputs for dashing
     private const float DOUBLE_TAP_TIME = 0.25f;
     private float lastTapTime;
     private float lastTapDeltaTime;
@@ -77,11 +103,14 @@ public class PlayerController : MonoBehaviour
 
 
     public PlayerStates currentState;
+    private PlayerStates lastState;
     public enum PlayerStates
     {
     walking,
     sprinting,
+    dashing,
     airborne,
+    wallSliding,
     talking,
     gliding
     }
@@ -90,77 +119,132 @@ public class PlayerController : MonoBehaviour
     {
         rb.freezeRotation = true;
         currentMoveSpeed = walkSpeed;
+        isOnWall = false;
     }
     void Update()
     {
+        DoubleTapToDash();
+        WallChecking();
         GroundChecking();
-        DragControl();
-        JumpCheckings();
 
-        StateControl();
+        if (lastMoveSpeed > currentMoveSpeed)
+        {
+           // StartCoroutine(nameof(KeepMomentum));
+        }
+
         SpeedCapping();
-
+        JumpCheckings();
+        StateControl();
+        
         Interactions();
-        LockToTalk();
-
-        Dash();
+       
+        DragControl();
     }
 
 
     private void FixedUpdate()
     {
-
-        FallingControl();
         Movement();
+        FallingControl();
     }
 
     private void StateControl()
     {
+        //getting directional inputs
         movementInput.x = Input.GetAxisRaw("Horizontal");
         movementInput.z = Input.GetAxisRaw("Vertical");
 
+        //setting the setting the diferent speeds and gravity forces along the states
 
-        if (isGrounded)
+        //TALKING
+        if (isTalking)
         {
-
-            currentMoveSpeed = walkSpeed;
-            currentState = PlayerStates.walking;
+            currentMoveSpeed = 0;
+            currentState = PlayerStates.talking;
         }
 
-       else if (Input.GetKey(sprintButton) && isGrounded)
+        //DASHING
+        else if (isDashing)
         {
+
+            lastMoveSpeed = currentMoveSpeed;
+            currentMoveSpeed = dashSpeed;
+            currentState = PlayerStates.dashing;
+        }
+
+        //SPRINTING
+        else if (Input.GetKey(sprintButton) && isGrounded)
+        {
+            lastMoveSpeed = currentMoveSpeed;
             currentMoveSpeed = sprintSpeed;
             currentState = PlayerStates.sprinting;
+            isOnWall = false;
         }
 
+        //WALKING
+        else if (isGrounded)
+        {
+            isOnWall = false;
+            lastMoveSpeed = currentMoveSpeed;
+            currentMoveSpeed = walkSpeed;
+            currentFallingMultiplier = fallingMultiplier;
+            currentState = PlayerStates.walking;
+
+            print("gravity reset");
+
+        }
+
+        //WALL SLIDING
+        else if (isOnWall && !isGrounded)
+        {
+            print("estou slidandando");
+            currentState = PlayerStates.wallSliding;
+            currentFallingMultiplier = wallSlideFallingMultiplier;
+
+        }
+
+        //AIRBORNE
         else if (!isGrounded)
         {
             currentState = PlayerStates.airborne;
+            currentFallingMultiplier = fallingMultiplier;
         }
+
+
+
 
         //only airborne
         if (currentState == PlayerStates.airborne)
         {
-            //airborne and moving down
-            if (rb.velocity.y <= 0)
+
+
+
+            if (Input.GetKeyUp(jumpButton))
+            {
+                rb.velocity = new Vector3(rb.velocity.x, rb.velocity.y * jumpCutAmount, rb.velocity.z);
+            }
+
+            //airborne and moving down without any wall
+            if (rb.velocity.y <= 0 && !isOnWall)
             {
                 currentFallingMultiplier = fallingMultiplier;
 
-                if (Input.GetKey(jumpButton))
+                if (Input.GetKey(jumpButton) && !isInBufferRange)
                 {
                     currentFallingMultiplier = glidingMultiplier.y;
                     currentState = PlayerStates.gliding;
                 }
             }
 
-            if (rb.velocity.y > 0)
+            else if (isOnWall)
             {
-                if (Input.GetKeyUp(jumpButton))
-                {
-                    rb.velocity = new Vector3(rb.velocity.x,  rb.velocity.y * jumpCutAmount, rb.velocity.z);
-                }
+                currentState = PlayerStates.wallSliding;
+                currentFallingMultiplier = wallSlideFallingMultiplier;
             }
+
+
         }
+
 
         //only gliding
         if (currentState == PlayerStates.gliding)
@@ -176,7 +260,7 @@ public class PlayerController : MonoBehaviour
 
     private void FallingControl()
     {
-        if (rb.velocity.y < 0)
+        if (rb.velocity.y <= 0 && !isGrounded)
         {
             rb.velocity += transform.up * Physics.gravity.y *  (currentFallingMultiplier  -1) * Time.fixedDeltaTime;
         }
@@ -213,7 +297,7 @@ public class PlayerController : MonoBehaviour
     {
         JumpBuffer();
     
-        if (Input.GetButtonDown("Jump") && isGrounded)
+        if (Input.GetButtonDown("Jump") && isGrounded && !hasBufferedJump)
         {
             Jump();
         }
@@ -227,22 +311,21 @@ public class PlayerController : MonoBehaviour
 
 
     private void Jump()
-    {
-      
+    {    
         rb.velocity = new Vector3(rb.velocity.x, 0, rb.velocity.z);
         rb.AddForce(transform.up * jumpForce, ForceMode.Impulse);
     }
 
     void JumpBuffer()
     {
-        bool isInBufferRange = Physics2D.Raycast(transform.position, Vector3.down ,playerHeight + bufferRange ,groundMask);
+        isInBufferRange = Physics.Raycast(transform.position, Vector3.down , playerHeight * 0.5f + 0.2f + bufferRange, groundMask);
         if (Input.GetButtonDown("Jump") && isInBufferRange )
         {
             hasBufferedJump = true;
         }
     }
 
-    private void Dash()
+    private void DoubleTapToDash()
     {
         // Atualizando o tempo do último toque
         if (Input.GetKeyDown(KeyCode.W) || Input.GetKeyDown(KeyCode.A) ||
@@ -290,7 +373,8 @@ public class PlayerController : MonoBehaviour
 
             if (direction != Vector3.zero)
             {
-                rb.AddForce(direction * dashForce, ForceMode.Impulse);
+                ResetTapCount();
+                Dash(direction);
             }
         }
     }
@@ -308,6 +392,26 @@ public class PlayerController : MonoBehaviour
         return fowardDashTaps + backwardDashTaps + rightDashTaps + leftDashTaps;
     }
 
+    private void ResetTapCount()
+    {
+        fowardDashTaps = 0;
+        backwardDashTaps = 0;
+        rightDashTaps = 0;
+        leftDashTaps = 0;
+    }
+
+
+    private void Dash(Vector3 direction)
+    {
+        isDashing = true;
+        rb.AddForce(direction * dashForce, ForceMode.Impulse);
+        Invoke(nameof(StopDash), dashDuration);
+    }
+
+    private void StopDash() 
+    {
+        isDashing = false;
+    }
 
     public void Interactions()
     {
@@ -343,31 +447,87 @@ public class PlayerController : MonoBehaviour
         isGrounded = Physics.Raycast(transform.position, UnityEngine.Vector3.down, playerHeight * 0.5f + 0.2f, groundMask);
     }
 
+    private void WallChecking()
+    {
+        float wallCheckerRange = playerRadius + 0.2f;
+        wallDirection = orientation.right * movementInput.x + orientation.forward * movementInput.z;
+        wallDirection = wallDirection.normalized;
+
+        //if on wall, no need to press direction to continue
+        if (isOnWall)
+        {
+            Physics.SphereCast(transform.position, wallCheckerRange, Vector3.forward, out wallHit, wallCheckerRange, wallMask);
+            WallMovement();
+        }
+
+        //if youre not, u need do input the wall direction to start to slide;
+        else
+        {
+            Physics.Raycast(transform.position, wallDirection, out wallHit, wallCheckerRange, wallMask);
+        }
+
+        if (wallHit.collider != null)
+            isOnWall = true;
+    }
+
+    private void WallMovement()
+    {
+        if (isOnWall && Input.GetKeyDown(jumpButton))
+        {
+            print("walljumpei");
+            Vector3 oppositeWallhitDirection = (transform.position - wallHit.point).normalized;
+
+            Vector3 force = new Vector3( oppositeWallhitDirection.x * wallJumpForce.x, oppositeWallhitDirection.y * wallJumpForce.y, oppositeWallhitDirection.z * wallJumpForce.z);
+
+            rb.AddForce(force,ForceMode.Impulse);
+        }
+    }
+
+
+
     private void DragControl()
     {
         if (currentState == PlayerStates.walking || currentState == PlayerStates.sprinting)
         {
             rb.drag = groundDrag;
         }
-       
 
         else
         {
                 rb.drag = 0;
         }
-        
+
     }
 
     private void SpeedCapping()
     {
         Vector3 horizontalVelocity = new Vector3(rb.velocity.x, 0f, rb.velocity.z);
 
-        if (horizontalVelocity.magnitude > 30)
+        if (horizontalVelocity.magnitude > currentMoveSpeed)
         {
             print("a movespeed é: " + currentMoveSpeed);
             Vector3 limitedVelocity = horizontalVelocity.normalized * currentMoveSpeed;
             rb.velocity = new Vector3(limitedVelocity.x, rb.velocity.y, limitedVelocity.z);
         }
+    }
+
+    private IEnumerator KeepMomentum()
+    {
+
+        float startTime = 0;
+        float speedDifference = Mathf.Abs(lastMoveSpeed - currentMoveSpeed);
+        float startingMoveSpeed = currentMoveSpeed;
+
+        while (startTime < speedDifference)
+        {
+            currentMoveSpeed = Mathf.Lerp(lastMoveSpeed, currentMoveSpeed, startTime / speedDifference);
+            print("suavizando..." + currentMoveSpeed);
+
+            startTime += Time.deltaTime * smoothingMultiplier;
+            yield return null;
+        }
+
+
     }
 
     public void LockToTalk()
@@ -377,13 +537,8 @@ public class PlayerController : MonoBehaviour
             currentMoveSpeed = 0;
 
         }
-
-        else
-        {
-            currentMoveSpeed = walkSpeed;
-
-        }
     }
+
 
     #endregion Checkings and Clamps
 
@@ -411,17 +566,26 @@ public class PlayerController : MonoBehaviour
                 objToInteract = null;
                 canInteract = false;
 
-            }
         }
+    }
 
-        void OnDrawGizmos()
-        {
-
+    void OnDrawGizmos()
+    {
+        float bufferLength = playerHeight * 0.5f + 0.2f + bufferRange;
         Gizmos.color = Color.blue;
-        Gizmos.DrawRay(transform.position, Vector3.down * playerHeight * 0.5f * 0.2f * bufferRange);
+        Gizmos.DrawRay(transform.position, Vector3.down * bufferLength);
 
+        float groundLength = playerHeight * 0.5f + 0.2f;
         Gizmos.color = Color.magenta;
-           Gizmos.DrawRay(transform.position,Vector3.down * (bufferRange + playerHeight));
-        }
-    } 
+        Gizmos.DrawRay(transform.position, Vector3.down * groundLength);
+
+        float wallLength = playerRadius + 0.2f;
+        Gizmos.color = Color.red;
+        Gizmos.DrawRay(transform.position, wallDirection * wallLength);
+
+       
+            Gizmos.DrawWireSphere(transform.position, wallLength);
+        
+    }
+}
 
