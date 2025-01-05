@@ -16,6 +16,7 @@ public class PlayerController : MonoBehaviour
     [Header("Player")]
     [SerializeField] private float playerHeight;
     [SerializeField] private float playerRadius;
+    private bool canInput;
 
     [Header("Movement")]
     [SerializeField] private float walkSpeed;
@@ -25,6 +26,11 @@ public class PlayerController : MonoBehaviour
     private float lastMoveSpeed;
 
     private Vector3 movementInput;
+
+    [Header("Dash")]
+    [SerializeField] private float dashDuration;
+    [SerializeField] private float dashForce;
+    private bool isDashing;
 
     [Header("Jump")]
     [SerializeField] private float airMultiplier;
@@ -44,14 +50,17 @@ public class PlayerController : MonoBehaviour
 
     [Header("WallJump")]
     [SerializeField] private Vector3 wallJumpForce;
+    [SerializeField] private bool isWalljumping;
 
-    [Header("Dash")]
-    private bool isDashing;
-    [SerializeField] private float dashDuration;
-    [SerializeField] private float dashForce;
+    [Header("Wallrun")]
+    [SerializeField] private float wallrunTime;
+    [SerializeField] private float wallrunSpeed;
+    [SerializeField] private bool isWallrunning;
+    [SerializeField] private float wallrunCheckDistance;
+    private Vector3 wallFoward;
 
     [Header("Keeping Momentum")]
-[   SerializeField] private float smoothingMultiplier;
+    [SerializeField] private float smoothingMultiplier;
 
     [Header("Jump Buffer")]
     [Range(0f, 1f)]
@@ -60,7 +69,7 @@ public class PlayerController : MonoBehaviour
     private bool hasBufferedJump;
     private bool isInBufferRange;
 
-   [Header("GroundChecking")]
+    [Header("GroundChecking")]
     [SerializeField] private LayerMask groundMask;
     [SerializeField] private float groundDrag;
     private bool isGrounded;
@@ -69,7 +78,9 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private LayerMask wallMask;
     Vector3 wallDirection;
     RaycastHit wallHit;
+    Vector3 wallHitDirection;
 
+    Vector3 sphereCastOrigin;
     private bool isOnWall;
 
     [Header("References")]
@@ -81,7 +92,7 @@ public class PlayerController : MonoBehaviour
     public KeyCode jumpButton;
     public KeyCode sprintButton;
 
-    
+
     //reading double tap inputs for dashing
     private const float DOUBLE_TAP_TIME = 0.25f;
     private float lastTapTime;
@@ -106,13 +117,15 @@ public class PlayerController : MonoBehaviour
     private PlayerStates lastState;
     public enum PlayerStates
     {
-    walking,
-    sprinting,
-    dashing,
-    airborne,
-    wallSliding,
-    talking,
-    gliding
+        walking,
+        sprinting,
+        dashing,
+        airborne,
+        wallSliding,
+        walljumping,
+        wallrunning,
+        talking,
+        gliding
     }
 
     void Start()
@@ -120,39 +133,62 @@ public class PlayerController : MonoBehaviour
         rb.freezeRotation = true;
         currentMoveSpeed = walkSpeed;
         isOnWall = false;
+        canInput = true;
     }
     void Update()
     {
+        Vector3 test = Vector3.Cross(new Vector3(0, 0, -1), new Vector3(0, 1, 0));
+        Debug.Log(test);  // Deve retornar (1, 0, 0)
+
         DoubleTapToDash();
         WallChecking();
         GroundChecking();
 
         if (lastMoveSpeed > currentMoveSpeed)
         {
-           // StartCoroutine(nameof(KeepMomentum));
+            // StartCoroutine(nameof(KeepMomentum));
         }
+
+        WallMovement();
 
         SpeedCapping();
         JumpCheckings();
         StateControl();
-        
+
         Interactions();
-       
-        DragControl();
+
+        ApplyDrag();
     }
 
 
     private void FixedUpdate()
     {
-        Movement();
-        FallingControl();
+        DirectionalMovement();
+        ApplyFallingMultiplier();
     }
 
+    //handy functions, like suspending inputs for x amount of time
+    #region Handy Functions
+    IEnumerator SuspendInputs(float time)
+    {
+        canInput = false;
+        yield return new WaitForSeconds(time);
+        canInput = true;
+
+    }
+    #endregion Handy Functions
+
+    //state handler and the directional movement
+    #region Movement and States
+    //in this function we get the directional inputs and control the speed and the variables changes upon state change
     private void StateControl()
     {
         //getting directional inputs
-        movementInput.x = Input.GetAxisRaw("Horizontal");
-        movementInput.z = Input.GetAxisRaw("Vertical");
+        if (canInput)
+        {
+            movementInput.x = Input.GetAxisRaw("Horizontal");
+            movementInput.z = Input.GetAxisRaw("Vertical");
+        }
 
         //setting the setting the diferent speeds and gravity forces along the states
 
@@ -185,22 +221,25 @@ public class PlayerController : MonoBehaviour
         else if (isGrounded)
         {
             isOnWall = false;
+            isWalljumping = false;
             lastMoveSpeed = currentMoveSpeed;
             currentMoveSpeed = walkSpeed;
             currentFallingMultiplier = fallingMultiplier;
             currentState = PlayerStates.walking;
 
-            print("gravity reset");
-
+        }
+        //WALLJUMPING
+        else if (isWalljumping)
+        {
+            currentState = PlayerStates.walljumping;
+            currentFallingMultiplier = fallingMultiplier;
         }
 
         //WALL SLIDING
-        else if (isOnWall && !isGrounded)
+        else if (isOnWall && !isGrounded && !isWalljumping)
         {
-            print("estou slidandando");
             currentState = PlayerStates.wallSliding;
             currentFallingMultiplier = wallSlideFallingMultiplier;
-
         }
 
         //AIRBORNE
@@ -210,14 +249,9 @@ public class PlayerController : MonoBehaviour
             currentFallingMultiplier = fallingMultiplier;
         }
 
-
-
-
         //only airborne
         if (currentState == PlayerStates.airborne)
         {
-
-
 
             if (Input.GetKeyUp(jumpButton))
             {
@@ -242,31 +276,18 @@ public class PlayerController : MonoBehaviour
                 currentFallingMultiplier = wallSlideFallingMultiplier;
             }
 
-
         }
-
 
         //only gliding
         if (currentState == PlayerStates.gliding)
-        {   
+        {
             if (Input.GetKeyUp(jumpButton))
             {
                 currentFallingMultiplier = glidingMultiplier.y;
             }
         }
-
-
     }
-
-    private void FallingControl()
-    {
-        if (rb.velocity.y <= 0 && !isGrounded)
-        {
-            rb.velocity += transform.up * Physics.gravity.y *  (currentFallingMultiplier  -1) * Time.fixedDeltaTime;
-        }
-    }
-
-    public void Movement()
+    public void DirectionalMovement()
     {
         //Rotate to match the camera;
         transform.rotation = UnityEngine.Quaternion.Euler(0, Camera.main.transform.localRotation.y, 0);
@@ -292,11 +313,67 @@ public class PlayerController : MonoBehaviour
             }
         }
     }
+    #endregion Movement and States
 
+    //in this region, you can find the functions that works on improving how the physics feel, not envolving any inputs
+    #region PhysicsEnhancements
+    private void ApplyFallingMultiplier()
+    {
+        if (rb.velocity.y <= 0 && !isGrounded)
+        {
+            rb.velocity += transform.up * Physics.gravity.y * (currentFallingMultiplier - 1) * Time.fixedDeltaTime;
+        }
+    }
+    private void ApplyDrag()
+    {
+        if (currentState == PlayerStates.walking || currentState == PlayerStates.sprinting)
+        {
+            rb.drag = groundDrag;
+        }
+
+        else
+        {
+            rb.drag = 0;
+        }
+
+    }
+
+    private void SpeedCapping()
+    {
+        Vector3 horizontalVelocity = new Vector3(rb.velocity.x, 0f, rb.velocity.z);
+
+        if (horizontalVelocity.magnitude > currentMoveSpeed)
+        {
+            Vector3 limitedVelocity = horizontalVelocity.normalized * currentMoveSpeed;
+            rb.velocity = new Vector3(limitedVelocity.x, rb.velocity.y, limitedVelocity.z);
+        }
+    }
+
+    private IEnumerator KeepMomentum()
+    {
+
+        float startTime = 0;
+        float speedDifference = Mathf.Abs(lastMoveSpeed - currentMoveSpeed);
+        float startingMoveSpeed = currentMoveSpeed;
+
+        while (startTime < speedDifference)
+        {
+            currentMoveSpeed = Mathf.Lerp(lastMoveSpeed, currentMoveSpeed, startTime / speedDifference);
+            print("suavizando..." + currentMoveSpeed);
+
+            startTime += Time.deltaTime * smoothingMultiplier;
+            yield return null;
+        }
+
+
+    }
+    #endregion PhysicsEnhancements
+
+    #region Jump
     void JumpCheckings()
     {
         JumpBuffer();
-    
+
         if (Input.GetButtonDown("Jump") && isGrounded && !hasBufferedJump)
         {
             Jump();
@@ -311,20 +388,26 @@ public class PlayerController : MonoBehaviour
 
 
     private void Jump()
-    {    
+    {
         rb.velocity = new Vector3(rb.velocity.x, 0, rb.velocity.z);
         rb.AddForce(transform.up * jumpForce, ForceMode.Impulse);
     }
+    #endregion Jump
 
+    //in this region, you'll find things like jump buffering, coyote time, this type of stuff
+    #region Input Correction
     void JumpBuffer()
     {
-        isInBufferRange = Physics.Raycast(transform.position, Vector3.down , playerHeight * 0.5f + 0.2f + bufferRange, groundMask);
-        if (Input.GetButtonDown("Jump") && isInBufferRange )
+        isInBufferRange = Physics.Raycast(transform.position, Vector3.down, playerHeight * 0.5f + 0.2f + bufferRange, groundMask);
+        if (Input.GetButtonDown("Jump") && isInBufferRange)
         {
             hasBufferedJump = true;
         }
     }
+    #endregion
 
+    //in this region, we read the double tap directional inputs in order to dash in its direction
+    #region DoubleTap Inputs
     private void DoubleTapToDash()
     {
         // Atualizando o tempo do último toque
@@ -399,8 +482,10 @@ public class PlayerController : MonoBehaviour
         rightDashTaps = 0;
         leftDashTaps = 0;
     }
+    #endregion DoubleTap Inputs
 
-
+    //the dash behaviour itself
+    #region Dash
     private void Dash(Vector3 direction)
     {
         isDashing = true;
@@ -408,11 +493,14 @@ public class PlayerController : MonoBehaviour
         Invoke(nameof(StopDash), dashDuration);
     }
 
-    private void StopDash() 
+    private void StopDash()
     {
         isDashing = false;
     }
+    #endregion
 
+    //the interaction behaviour
+    #region Interactions
     public void Interactions()
     {
         if (canInteract)
@@ -438,10 +526,10 @@ public class PlayerController : MonoBehaviour
             }
         }
     }
+    #endregion Interactions
 
-
-    #region Checkings and Clamps
-
+    //checks if the player is grounded or in the wall
+    #region Checking
     private void GroundChecking()
     {
         isGrounded = Physics.Raycast(transform.position, UnityEngine.Vector3.down, playerHeight * 0.5f + 0.2f, groundMask);
@@ -449,100 +537,97 @@ public class PlayerController : MonoBehaviour
 
     private void WallChecking()
     {
+        //line values calculation, need to press towards the wall
         float wallCheckerRange = playerRadius + 0.2f;
         wallDirection = orientation.right * movementInput.x + orientation.forward * movementInput.z;
         wallDirection = wallDirection.normalized;
 
-        //if on wall, no need to press direction to continue
-        if (isOnWall)
+
+        //if is dashing, can start a wallrun by colliding at the right angle
+        if (isDashing)
         {
-            Physics.SphereCast(transform.position, wallCheckerRange, Vector3.forward, out wallHit, wallCheckerRange, wallMask);
-            WallMovement();
+            if (Physics.Raycast(transform.position, orientation.forward, out wallHit, wallrunCheckDistance, wallMask))
+            {
+                float angle = Mathf.Abs(Vector3.Angle(orientation.forward, wallHit.normal));
+
+                print(angle);
+
+                if (angle >= 45 && !isWallrunning)
+                {
+                    //need to store wallhit in a variable in order to maintain it, because of "out wallHit" on the raycast declaration
+                    isWallrunning = true;
+                    Vector3 wallNormal = wallHit.normal;
+                    Vector3 wallFoward = Vector3.Cross(wallNormal, transform.up);
+                    print("logo após o calculo, wallfoward era: " + wallFoward);
+                    StopDash();
+                }
+            }
+        }
+
+        //if on wall, no need to press direction to continue
+        else if (isOnWall && !isWallrunning)
+        {
+            if (wallDirection.magnitude > 0)
+            {
+                wallHitDirection = wallDirection;
+            }
+
+            isOnWall = Physics.Raycast(transform.position, wallHitDirection, out wallHit, wallCheckerRange, wallMask);
         }
 
         //if youre not, u need do input the wall direction to start to slide;
-        else
+        else if (!isWallrunning)
         {
-            Physics.Raycast(transform.position, wallDirection, out wallHit, wallCheckerRange, wallMask);
+            isOnWall = Physics.Raycast(transform.position, wallDirection, out wallHit, wallCheckerRange, wallMask);
         }
 
-        if (wallHit.collider != null)
-            isOnWall = true;
+    }
+
+
+
+    //the walljump itself
+    private void Walljump()
+    {
+        //checks the opposite direction to the wall as well as the force to be applied
+        Vector3 oppositeWallhitDirection = wallHit.normal;
+        Vector3 force = new Vector3(oppositeWallhitDirection.x * wallJumpForce.x, wallJumpForce.y, oppositeWallhitDirection.z * wallJumpForce.z);
+
+        //resets the current vertical speed and applies the force
+        rb.velocity = new Vector3(rb.velocity.x, 0, rb.velocity.z);
+        rb.AddForce(force, ForceMode.Impulse);
+
+
+        //reset the wallhit, detaches from the wall and suspend inputs for a brief moment, in order to not get caught on the wall again
+        wallHit = new RaycastHit();
+        isOnWall = false;
+        StartCoroutine(SuspendInputs(0.25f));
     }
 
     private void WallMovement()
     {
-        if (isOnWall && Input.GetKeyDown(jumpButton))
+        //WALLJUMP
+        if (isOnWall && Input.GetKeyDown(jumpButton) && canInput)
         {
-            print("walljumpei");
-            Vector3 oppositeWallhitDirection = (transform.position - wallHit.point).normalized;
+            Walljump();
+        }
 
-            Vector3 force = new Vector3( oppositeWallhitDirection.x * wallJumpForce.x, oppositeWallhitDirection.y * wallJumpForce.y, oppositeWallhitDirection.z * wallJumpForce.z);
-
-            rb.AddForce(force,ForceMode.Impulse);
+        //WALLRUN
+        if (isWallrunning)
+        {
+            Wallrun(wallFoward);  
         }
     }
 
-
-
-    private void DragControl()
+    private void Wallrun(Vector3 direction)
     {
-        if (currentState == PlayerStates.walking || currentState == PlayerStates.sprinting)
-        {
-            rb.drag = groundDrag;
-        }
-
-        else
-        {
-                rb.drag = 0;
-        }
+        rb.AddForce(direction * wallrunSpeed, ForceMode.Force);
 
     }
 
-    private void SpeedCapping()
-    {
-        Vector3 horizontalVelocity = new Vector3(rb.velocity.x, 0f, rb.velocity.z);
+    #endregion Checking
 
-        if (horizontalVelocity.magnitude > currentMoveSpeed)
-        {
-            print("a movespeed é: " + currentMoveSpeed);
-            Vector3 limitedVelocity = horizontalVelocity.normalized * currentMoveSpeed;
-            rb.velocity = new Vector3(limitedVelocity.x, rb.velocity.y, limitedVelocity.z);
-        }
-    }
-
-    private IEnumerator KeepMomentum()
-    {
-
-        float startTime = 0;
-        float speedDifference = Mathf.Abs(lastMoveSpeed - currentMoveSpeed);
-        float startingMoveSpeed = currentMoveSpeed;
-
-        while (startTime < speedDifference)
-        {
-            currentMoveSpeed = Mathf.Lerp(lastMoveSpeed, currentMoveSpeed, startTime / speedDifference);
-            print("suavizando..." + currentMoveSpeed);
-
-            startTime += Time.deltaTime * smoothingMultiplier;
-            yield return null;
-        }
-
-
-    }
-
-    public void LockToTalk()
-    {
-        if (isTalking)
-        {
-            currentMoveSpeed = 0;
-
-        }
-    }
-
-
-    #endregion Checkings and Clamps
-
-
+    //unity colliders functions
+    #region OnTrigger and OnCollision functions
     private void OnTriggerStay(Collider other)
         {
             print(other.name);
@@ -552,22 +637,23 @@ public class PlayerController : MonoBehaviour
                 objToInteract = other.gameObject;
                 canInteract = true;
 
-            }
         }
+    }
 
-        private void OnTriggerExit(Collider other)
+    private void OnTriggerExit(Collider other)
 
+    {
+
+        print(other.tag);
+        if (other.CompareTag("Interactible"))
         {
 
-            print(other.tag);
-            if (other.CompareTag("Interactible"))
-            {
-
-                objToInteract = null;
-                canInteract = false;
+            objToInteract = null;
+            canInteract = false;
 
         }
     }
+    #endregion OnTrigger and OnCollision functions
 
     void OnDrawGizmos()
     {
@@ -580,11 +666,11 @@ public class PlayerController : MonoBehaviour
         Gizmos.DrawRay(transform.position, Vector3.down * groundLength);
 
         float wallLength = playerRadius + 0.2f;
-        Gizmos.color = Color.red;
+        Gizmos.color = Color.green;
         Gizmos.DrawRay(transform.position, wallDirection * wallLength);
 
-       
-            Gizmos.DrawWireSphere(transform.position, wallLength);
+        Gizmos.color = Color.red;
+        Gizmos.DrawWireSphere(sphereCastOrigin, wallLength);
         
     }
 }
